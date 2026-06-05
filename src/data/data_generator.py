@@ -141,6 +141,8 @@ def make_clients(n:int) -> pd.DataFrame:
         "fav_mcc": fav_mcc,
         "product": product,
     })
+
+
 #-----Генерация одной «нормальной» транзакции---------
 def normal_transaction(client: pd.Series, trx_date: datetime) -> dict:
     mcc = int(rng.choice(list(MERCHANTS.keys())))
@@ -221,7 +223,7 @@ def fraud_transaction(client: pd.Series, trx_date: datetime) -> dict:
 #-----Основной генератор-------
 def generate(n_rows: int = N_ROWS) -> pd.DataFrame:
     clients  = make_clients(N_CLIENTS)
-    start_dt = datetime(2023, 1, 1)
+    start_dt = datetime(2024, 1, 1)
     end_dt   = datetime(2024, 12, 31)
     delta_s  = int((end_dt - start_dt).total_seconds())
 
