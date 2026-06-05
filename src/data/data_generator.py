@@ -1,5 +1,3 @@
-import types
-
 import pandas as pd
 import numpy as np
 import random
@@ -9,22 +7,23 @@ def generate_data(num_records = 20000, fraud_ratio = 0.015, seed = 42):
     np.random.seed(seed)
     random.seed(seed)
 
-    mccs = ['5691', '5812', '5814', '5815', '5816', '5817', '5818', '5819', '5820', '5821',
-            '5912', '5921', '5931', '5932', '5933', '5940', '5941', '5942', '5943', '5944', 
-            '5945', '5946', '5947', '5948', '5949', '5950', '5960', '5961', '5962', '5963', 
-            '5964', '5965', '5966', '5967', '5968', '5969', '5970', '5971', '5972', '5973', 
-            '5974', '5975', '5976', '5977', '5978', '5979', '5980', '5981', '5982', '5983', 
-            '5984', '5985', '5986', '5987', '5988', '5989', '5990', '5991', '5992', '5993', 
-            '5994', '5995', '5996', '5997', '5998', '5999', '6010', '6011', '6012', '6013', 
-            '6014', '6015', '6016', '6017', '6018', '6019', '6020', '6021', '6022', '6023', 
-            '6024', '6025', '6026', '6027', '6028', '6029', '6030', '6031', '6032', '6033', 
-            '6034', '6035', '6036', '6037', '6038', '6039', '6040', '6041', '6042', '6043', 
-            '6044', '6045', '6046', '6047', '6048', '6049', '6050', '6051', '6052', '6053', 
-            '6054', '6055', '6056', '6057', '6058', '6059', '6060', '6061', '6062', '6063', 
-            '6064', '6065', '6066', '6067', '6068', '6069', '6070', '6071', '6072', '6073', 
-            '6074', '6075', '6076', '6077', '6078', '6079', '6080', '6081', '6082', '6083', 
-            '6084', '6085', '6086', '6087', '6088', '6089', '6090', '6091', '6092', '6093', 
-            '6094', '6095', '6096', '6097', '6098', '6099', '6100', '6101', '6102', '6103']
+    legit_mccs_with_weights = {
+        '5411': 0.40,
+        '5499': 0.10,
+        '5814': 0.15,
+        '4121': 0.12,
+        '5331': 0.08,
+        '5812': 0.05,
+        '5912': 0.04,
+        '5541': 0.03,
+        '5691': 0.02,
+        '5977': 0.01,
+    }
+
+    gambling_mccs = ['7995', '7800', '7801', '7802']
+    crypto_invest_mccs = ['6051', '6211', '6282', '6529']
+    card_testing_mccs = ['5815', '5816', '5817', '5818', '5734', '5942', '5999']
+    cashout_mccs = ['4829', '6011', '6536', '6537', '6540']
     
     pos_modes = [
         '0710 - Contactless - VSDC chip',
@@ -112,20 +111,42 @@ def generate_data(num_records = 20000, fraud_ratio = 0.015, seed = 42):
     nat_weights = [kz_weight] + [other_weight] * num_other_countries
 
     num_fraud = int(num_records*fraud_ratio)
-    num_normal = num_records - num_fraud
+    num_normal = num_records-num_fraud
 
     data = []
 
-    base_data = datetime(2026, 5, 20)
+    base_date = datetime(2026, 5, 20)
+
+    mccs_list = list(legit_mccs_with_weights.keys())
+    mccs_weights = list(legit_mccs_with_weights.values())
 
     for _ in range(num_normal):
         user_id = f"{random.choice(['P', 'C'])}{random.randint(1, 5000):09d}"
 
         days_offset = random.randint(0, 30)
-        trx_time = (base_data + timedelta(days=days_offset)).strftime("%Y%m%d")
+        hours_offset = random.randint(0, 23)
+        minutes_offset = random.randint(0, 59)
+        seconds_offset = random.randint(0, 59)
+        trx_datetime = base_date + timedelta(
+            days=days_offset, 
+            hours=hours_offset, 
+            minutes=minutes_offset, 
+            seconds=seconds_offset
+        )
 
-        sales_amt = round(float(np.random.lognormal(mean=9.5, sigma=1.2)), 2)
-        sales_amt = max(1000.0, min(sales_amt, 150000.0))
+        auth_datetime = trx_datetime + timedelta(seconds=random.randint(0, 3))
+
+        trx_time = trx_datetime.strftime("%Y-%m-%d %H:%M:%S")
+        auth_time = auth_datetime.strftime("%Y-%m-%d %H:%M:%S")
+
+        selected_mcc = random.choices(mccs_list, weights=mccs_weights, k=1)[0]
+
+        if selected_mcc in ['5411', '5499', '5814', '4121']:
+            sales_amt = round(float(np.random.lognormal(mean=7.5, sigma=0.8)), 2) # мелкие/средние чеки
+            sales_amt = max(500.0, min(sales_amt, 15000.0))
+        else:
+            sales_amt = round(float(np.random.lognormal(mean=9.5, sigma=1.0)), 2) # крупные чеки
+            sales_amt = max(3000.0, min(sales_amt, 100000.0))
 
         nat_code = random.choices(nat_codes, weights=nat_weights, k=1)[0]
         
@@ -135,7 +156,7 @@ def generate_data(num_records = 20000, fraud_ratio = 0.015, seed = 42):
         data.append({
             'MEMBER_NAME': user_id,
             'TRANSACTION_DATE': trx_time,
-            'AUTHORIZATION_DATE': trx_time,
+            'AUTHORIZATION_DATE': auth_time,
             'MERCHANT_NO': str(random.randint(1000000000, 9999999999)),
             'MERCHANT_NAME': random.choice(['WALMART', 'AMAZON', 'STARBUCKS', 'APPLE STORE', 
                                             'SAMSUNG', 'NIKE', 'ADIDAS', 'TARGET', 
@@ -144,7 +165,7 @@ def generate_data(num_records = 20000, fraud_ratio = 0.015, seed = 42):
                                             'UNIQLO', 'LOWE\'S', 'WAYFAIR', 'EBAY']),
             'CITY_NAME': city,
             'NATIONAL_CODE': nat_code,
-            'MCC': random.choice([m for m in mccs if m != '6012']),
+            'MCC': selected_mcc,
             'POS_MODE': random.choice(pos_modes),
             'PRODUCT_NAME': prod,
             'SETTLEMENT_AMOUNT': sales_amt,
@@ -153,33 +174,70 @@ def generate_data(num_records = 20000, fraud_ratio = 0.015, seed = 42):
             'IS_FRAUD': 0
         })
 
+    fraud_patterns = ['card_testing', 'gambling_scam', 'cashout', 'crypto_drain']
     for _ in range(num_fraud):
         user_id = f"{random.choice(['P', 'C'])}{random.randint(1, 5000):09d}"
-        trx_time = (base_data + timedelta(days=random.randint(0, 30))).strftime("%Y%m%d")
-        sales_amt = float(random.choice([300000, 400000, 500000, 800000, 1190000]))
+        fraud_hour = random.choice([0, 1, 2, 3, 4, 5]) 
+        base_fraud_time = base_date + timedelta(days=random.randint(0, 30), hours=fraud_hour, minutes=random.randint(0, 45))
+        time_lag_from_compromise = timedelta(seconds=random.randint(1, 120)) 
+        trx_datetime = base_fraud_time + time_lag_from_compromise
+
+        auth_datetime = trx_datetime + timedelta(seconds=1) 
+
+        trx_time = trx_datetime.strftime("%Y-%m-%d %H:%M:%S")
+        auth_time = auth_datetime.strftime("%Y-%m-%d %H:%M:%S")
+
+        pattern = random.choice(fraud_patterns)
 
         nat_code = random.choices(nat_codes, weights=nat_weights, k=1)[0]
         city = random.choice(country_city_map[nat_code])
 
+        if pattern == 'card_testing':
+            # правило F017: малые суммы <1000 KZT для проверки карты
+            selected_mcc = random.choice(card_testing_mccs)
+            sales_amt = round(random.uniform(100.0, 950.0), 2)
+            merchant = 'STEAM GAMES' if selected_mcc == '5816' else 'MICROSOFT_STORE'
+            pos_mode = '0001 - E-commerce'
+            trx_type = 'WWW'
+
+        elif pattern == 'gambling_scam':
+            # правило F003 / High Risk MCC (гемблинг)
+            selected_mcc = random.choice(gambling_mccs)
+            sales_amt = round(random.uniform(50000.0, 250000.0), 2)
+            merchant = 'CASINO_ONLINE_XYZ'
+            pos_mode = '0001 - E-commerce'
+            trx_type = 'WWW'
+
+        elif pattern == 'cashout':
+            # правило F038: быстрый вывод/снятие наличных или P2P переводы
+            selected_mcc = random.choice(cashout_mccs)
+            sales_amt = round(random.uniform(200000.0, 500000.0), 2)
+            merchant = 'P2P_TRANSFER_DROP'
+            pos_mode = '0110 - Swipe' if selected_mcc == '6011' else '0001 - E-commerce'
+            trx_type = 'ATM' if selected_mcc == '6011' else 'WWW'
+
+        else:
+            # пополнение крипты/брокеров с высокими MCC для инвестиций/крипты
+            selected_mcc = random.choice(crypto_invest_mccs)
+            sales_amt = float(random.choice([400000, 800000, 1190000]))
+            merchant = 'BINANCE CRYPTO'
+            pos_mode = '1000 - Credential on file'
+            trx_type = 'WWW'
+
         data.append({
             'MEMBER_NAME': user_id,
             'TRANSACTION_DATE': trx_time,
-            'AUTHORIZATION_DATE': trx_time,
+            'AUTHORIZATION_DATE': auth_time,
             'MERCHANT_NO': str(random.randint(1000000000, 9999999999)),
-            'MERCHANT_NAME': random.choice(['WALMART', 'AMAZON',
-                                            'STARBUCKS', 'APPLE STORE', 
-                                            'SAMSUNG', 'NIKE', 'ADIDAS', 'TARGET', 
-                                            'BEST BUY', 'COSTCO', 'HOME DEPOT', 'MACY\'S', 
-                                            'SEPHORA', 'GAP', 'H&M', 'ZARA', 
-                                            'UNIQLO', 'LOWE\'S', 'WAYFAIR', 'EBAY']),
+            'MERCHANT_NAME': merchant,
             'CITY_NAME': city,
             'NATIONAL_CODE': nat_code,
-            'MCC': '6012',
-            'POS_MODE': random.choice(pos_modes),
+            'MCC': selected_mcc,
+            'POS_MODE': pos_mode,
             'PRODUCT_NAME': random.choice(product_names),
             'SETTLEMENT_AMOUNT': sales_amt,
             'SALES_AMOUNT': sales_amt,
-            'TRX_TYPE': random.choice(trx_types),
+            'TRX_TYPE': trx_type,
             'IS_FRAUD': 1
         })
 
