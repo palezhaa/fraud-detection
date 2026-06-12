@@ -18,11 +18,33 @@ def generate_data(num_records: int = 20_000,
         "5331": 0.08, "5812": 0.05, "5912": 0.04, "5541": 0.03,
         "5691": 0.02, "5977": 0.01, "7995": 0.01, "6051": 0.01,
         "5816": 0.02, "5999": 0.01,
-    }
+        "6011": 0.05,}
     gambling_mccs      = ["7995", "7800", "7801", "7802"]
     crypto_invest_mccs = ["6051", "6211", "6282", "6529"]
     card_testing_mccs  = ["5815", "5816", "5817", "5818", "5734", "5942", "5999"]
+    # 6011 намеренно исключен: для него TRX_TYPE='ATM', а P2P-паттерн
+    # ниже всегда использует TRX_TYPE='WWW'. ATM вывод покрыт отдельным
+    # паттерном F038_atm_cashout
     cashout_mccs       = ["4829", "6536", "6537", "6540"]
+
+    MCC_MERCHANTS: dict[str, list[str]] = {
+        "5411": ["MAGNUM", "WILD BERRIES", "SMALL", "GALMART", "RAMSTORE"],
+        "5499": ["OLIMP_KZ", "MAGNUM", "FRESH_MARKET", "WILD BERRIES"],
+        "5814": ["KFC", "BURGER_KING", "HARDEE'S", "DODO_PIZZA"],
+        "4121": ["YANDEX TAXI", "INDRIVE", "CITYMOBIL"],
+        "5331": ["TARGET", "WAYFAIR", "H&M", "FIX_PRICE"],
+        "5812": ["STARBUCKS", "COSTA_COFFEE", "KFC"],
+        "5912": ["APTEKA_EVROPA", "PHARMACY_24", "GREEN_APTEKA"],
+        "5541": ["KAZMUNAYGAS", "SHELL", "HELIOS_PETROLEUM"],
+        "5691": ["ZARA", "H&M", "UNIQLO", "GAP", "NIKE", "ADIDAS"],
+        "5977": ["SEPHORA", "RIVE_GAUCHE", "L'ETOILE"],
+        "7995": ["1XBET", "OLIMP_BET", "PARIMATCH"],
+        "6051": ["BINANCE", "BYBIT", "CRYPTO_EXCHANGE"],
+        "5816": ["STEAM_GAMES", "GOOGLE_PLAY", "APPLE STORE", "PLAYSTATION_STORE"],
+        "5999": ["AMAZON", "EBAY", "WAYFAIR"],
+        "6011": ["ATM_HALYK_KZ", "ATM_KASPI_KZ", "ATM_SBERBANK_KZ", "ATM_FORTEBANK"],
+    }
+    GENERIC_MERCHANTS = ["WALMART", "AMAZON", "TARGET", "COSTCO"]  # резерв для непредусмотренных MCC
 
     pos_modes_ecom = [
         "0001 - E-commerce",
@@ -123,9 +145,14 @@ def generate_data(num_records: int = 20_000,
             return random.choice(pos_modes_atm)
         return random.choice(pos_modes_pos)
 
-    def _product_name(nat_code: str) -> str:
+    def _product_name(nat_code: str, trx_type: str = "POS") -> str:
         pool = product_names_domestic if nat_code == "KZ" else product_names_intl
+        if trx_type == "ATM":
+            return pool[3]
         return random.choice(pool)
+
+    def _merchant_name(mcc: str) -> str:
+        return random.choice(MCC_MERCHANTS.get(mcc, GENERIC_MERCHANTS))
 
     def _trx_type_by_mcc(mcc: str) -> str:
         if mcc in {"5816", "5815", "5817", "5818", "6051", "6211"}:
@@ -176,14 +203,6 @@ def generate_data(num_records: int = 20_000,
     mccs_weights = list(legit_mccs_with_weights.values())
     hour_weights = [1,1,1,1,2,3,5,10,15,20,25,30,35,35,30,25,30,35,40,35,25,15,10,5]
 
-    merchant_names_normal = [
-        "WALMART", "AMAZON", "STARBUCKS", "APPLE STORE", "SAMSUNG",
-        "NIKE", "ADIDAS", "TARGET", "BEST BUY", "COSTCO",
-        "HOME DEPOT", "MACY'S", "SEPHORA", "GAP", "H&M",
-        "ZARA", "UNIQLO", "LOWE'S", "WAYFAIR", "EBAY",
-        "MAGNUM", "YANDEX TAXI", "KFC", "WILD BERRIES", "OLIMP_KZ",
-    ]
-
     for _ in range(num_normal):
         uid     = f"{random.choice(['P','C'])}{random.randint(1, 5000):09d}"
         profile = user_profiles[uid]
@@ -198,12 +217,16 @@ def generate_data(num_records: int = 20_000,
         mcc      = random.choices(mccs_list, weights=mccs_weights, k=1)[0]
         trx_type = _trx_type_by_mcc(mcc)
 
-        amt = max(100.0, float(np.random.lognormal(
-            mean  = np.log(profile["avg_amount"]),
-            sigma = 1.2,
-        )))
-        if mcc in gambling_mccs + crypto_invest_mccs:
-            amt *= random.uniform(1.5, 3.0)
+        if trx_type == "ATM":
+            amt = round(float(np.random.lognormal(mean=np.log(15_000.0), sigma=0.6)), -3)
+            amt = max(1_000.0, amt)
+        else:
+            amt = max(100.0, float(np.random.lognormal(
+                mean  = np.log(profile["avg_amount"]),
+                sigma = 1.2,
+            )))
+            if mcc in gambling_mccs + crypto_invest_mccs:
+                amt *= random.uniform(1.5, 3.0)
 
         nat_code = (
             profile["home_country"]
@@ -214,9 +237,9 @@ def generate_data(num_records: int = 20_000,
         data.append(_build(
             uid, trx_dt, auth_dt,
             str(random.randint(1_000_000_000, 9_999_999_999)),
-            random.choice(merchant_names_normal),
+            _merchant_name(mcc),
             random.choice(country_city_map[nat_code]),
-            nat_code, mcc, _pos_mode(trx_type), _product_name(nat_code),
+            nat_code, mcc, _pos_mode(trx_type), _product_name(nat_code, trx_type),
             amt, trx_type,
         ))
 
@@ -317,7 +340,7 @@ def generate_data(num_records: int = 20_000,
             generated_fraud += 1
 
         elif pattern == "F006_velocity_cluster":
-            mcc          = random.choice(["5411", "5814", "5816", "5817"])
+            mcc          = random.choice(["5816", "5999"])
             nat_code     = profile["home_country"]
             city         = random.choice(country_city_map[nat_code])
             cluster_start = base_date + timedelta(
@@ -331,7 +354,7 @@ def generate_data(num_records: int = 20_000,
                 data.append(_build(
                     uid, dt, dt + timedelta(seconds=random.randint(1, 2)),
                     str(random.randint(1_000_000_000, 9_999_999_999)),
-                    random.choice(["AMAZON", "STEAM_GAMES", "GOOGLE_PLAY"]),
+                    _merchant_name(mcc),
                     city, nat_code, mcc, "0001 - E-commerce", _product_name(nat_code),
                     round(random.uniform(500.0, 5_000.0), 2), "WWW", is_fraud=1,
                 ))
@@ -348,14 +371,15 @@ def generate_data(num_records: int = 20_000,
                 if generated_fraud >= num_fraud:
                     break
                 dt = cluster_start + timedelta(minutes=j * random.randint(5, 9))
+                amt = round(float(np.random.lognormal(mean=np.log(100_000.0), sigma=0.3)), -4)
+                amt = min(max(amt, 50_000.0), 300_000.0)
                 data.append(_build(
                     uid, dt, dt + timedelta(seconds=random.randint(1, 3)),
                     str(random.randint(1_000_000_000, 9_999_999_999)),
-                    f"ATM_KZ_{random.randint(100, 999)}",
+                    _merchant_name("6011"),
                     city, nat_code, "6011", "0006 - Cash",
-                    "1308172001: Cash Withdrawal Transaction(Domestic)",
-                    random.choice([50_000.0, 100_000.0, 150_000.0]),
-                    "ATM", is_fraud=1,
+                    _product_name(nat_code, "ATM"),
+                    amt, "ATM", is_fraud=1,
                 ))
                 generated_fraud += 1
 

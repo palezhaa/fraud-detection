@@ -82,13 +82,64 @@ class TestAmounts:
         rounded = df["SALES_AMOUNT"].round(2)
         assert np.allclose(df["SALES_AMOUNT"], rounded, atol=1e-9)
 
-    def test_atm_amounts_are_round_limits(self, df):
-        atm_fraud = df[(df["TRX_TYPE"] == "ATM") & (df["IS_FRAUD"] == 1)]
-        if len(atm_fraud) > 0:
-            allowed = {50_000.0, 100_000.0, 150_000.0}
-            assert set(atm_fraud["SALES_AMOUNT"].unique()) <= allowed
+    def test_atm_amounts_are_round_denominations(self, df):
+        # все ATM-суммы (обычные и fraud) генерируются через lognormal
+        # с округлением до купюр: обычные -> кратно 1000, fraud -> кратно 10000
+        atm = df[df["TRX_TYPE"] == "ATM"]
+        if len(atm) == 0:
+            pytest.skip("No ATM records in this sample")
 
-    def test_card_testing_amounts_below_threshold(self, df):
+        normal_atm = atm[atm["IS_FRAUD"] == 0]
+        if len(normal_atm) > 0:
+            assert (normal_atm["SALES_AMOUNT"] % 1000 == 0).all()
+            assert (normal_atm["SALES_AMOUNT"] >= 1_000.0).all()
+
+        fraud_atm = atm[atm["IS_FRAUD"] == 1]
+        if len(fraud_atm) > 0:
+            assert (fraud_atm["SALES_AMOUNT"] % 10_000 == 0).all()
+            assert (fraud_atm["SALES_AMOUNT"] >= 50_000.0).all()
+            assert (fraud_atm["SALES_AMOUNT"] <= 300_000.0).all()
+
+    def test_atm_not_exclusively_fraud(self, df):
+        # регрессионный тест: раньше MCC=6011 встречался только во
+        # fraud-паттерне F038_atm_cashout => 100% ATM были fraud.
+        atm = df[df["TRX_TYPE"] == "ATM"]
+        if len(atm) == 0:
+            pytest.skip("No ATM records in this sample")
+
+        fraud_rate = atm["IS_FRAUD"].mean()
+        assert fraud_rate < 0.5, (
+            f"Fraction of fraud among ATM transactions = {fraud_rate:.2%} -- "
+            f"looks like a regression (MCC=6011 is not generated as a normal transaction)"
+        )
+        assert (atm["IS_FRAUD"] == 0).any(), "No normal ATM transactions found"
+
+    def test_mcc_matches_merchant_category(self, df):
+        # регрессионный тест: MERCHANT_NAME должен соответствовать
+        # категории MCC (см. MCC_MERCHANTS в data_generator.py)
+        expected = {
+            "4121": {"YANDEX TAXI", "INDRIVE", "CITYMOBIL"},
+            "5816": {"STEAM_GAMES", "GOOGLE_PLAY", "APPLE STORE", "PLAYSTATION_STORE"},
+            "6011": {"ATM_HALYK_KZ", "ATM_KASPI_KZ", "ATM_SBERBANK_KZ", "ATM_FORTEBANK"},
+            "7995": {"1XBET", "OLIMP_BET", "PARIMATCH"},
+            "6051": {"BINANCE", "BYBIT", "CRYPTO_EXCHANGE"},
+        }
+        normal = df[df["IS_FRAUD"] == 0]
+        for mcc, allowed in expected.items():
+            actual = set(normal.loc[normal["MCC"] == mcc, "MERCHANT_NAME"].unique())
+            assert actual <= allowed, (
+                f"MCC={mcc}: unexpected merchants {actual - allowed}"
+            )
+
+    def test_taxi_mcc_not_a_supermarket(self, df):
+        # конкретный кейс из обратной связи: MCC=4121 (такси) не должен
+        # выдаваться супермаркетам типа MAGNUM/WALMART/COSTCO, 
+        # иначе модели могут легко переобучиться на этих ярких фичах 
+        # и не научиться распознавать такси по другим признакам
+        normal = df[df["IS_FRAUD"] == 0]
+        taxi = normal[normal["MCC"] == "4121"]
+        supermarket_names = {"MAGNUM", "WALMART", "COSTCO", "WILD BERRIES", "GALMART", "RAMSTORE"}
+        assert not set(taxi["MERCHANT_NAME"].unique()) & supermarket_names
         # F007: суммы 100-900 в card-testing MCC
         cardtest_mccs = {"5815", "5816", "5817", "5818", "5734", "5942", "5999"}
         ct = df[(df["IS_FRAUD"] == 1)
@@ -178,19 +229,30 @@ class TestBenfordsLaw:
                 f"than digit {low_digit} ({freq.get(low_digit, 0):.1%})"
             )
 
-    def test_atm_round_amounts_violate_benford(self, df):
-        # контрольный тест: ATM-фрод намеренно использует "круглые" суммы
-        # (50000/100000/150000), все начинаются на 1 или 5
+    def test_atm_fraud_amounts_are_large_and_round(self, df):
+        # контрольный тест: ATM фрод намеренно использует крупные суммы,
+        # кратные 10 000 (округление до купюр через lognormal)
         # это ОЖИДАЕМОЕ отклонение от Бенфорда - документируем его явно,
-        # чтобы при добавлении новых round-amount паттернов разработчик
-        # осознанно решал, ломает ли это общее распределение слишком сильно
+        # чтобы при изменении паттерна осознанно решать, 
+        # сохранять ли такое нарушение или нет, и не допустить регрессий,
+        # ломает ли это общее распределение
         atm_fraud = df[(df["TRX_TYPE"] == "ATM") & (df["IS_FRAUD"] == 1)]
         if len(atm_fraud) == 0:
             pytest.skip("No ATM fraud records in this sample")
 
-        digits = atm_fraud["SALES_AMOUNT"].apply(first_digit)
-        # все суммы из {50000, 100000, 150000} -> первая цифра 5 или 1
-        assert set(digits.unique()) <= {1, 5}
+        assert (atm_fraud["SALES_AMOUNT"] % 10_000 == 0).all()
+        assert (atm_fraud["SALES_AMOUNT"] >= 50_000.0).all()
+
+    def test_atm_normal_vs_fraud_amount_ranges_differ(self, df):
+        # обычные ATM снятия (медиана ~15k) должны быть в среднем
+        # существенно меньше fraud кэшаута (диапазон 50k-300k)
+        atm = df[df["TRX_TYPE"] == "ATM"]
+        normal_atm = atm[atm["IS_FRAUD"] == 0]["SALES_AMOUNT"]
+        fraud_atm  = atm[atm["IS_FRAUD"] == 1]["SALES_AMOUNT"]
+        if len(normal_atm) == 0 or len(fraud_atm) == 0:
+            pytest.skip("Not enough ATM records for comparison")
+
+        assert normal_atm.median() < fraud_atm.median()
 
     def test_full_dataset_benford_not_grossly_violated(self, df):
         # весь датасет (включая fraud) - допускаем больший chi2,
