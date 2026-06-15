@@ -11,7 +11,7 @@ Seed фиксирован - данные воспроизводимы при л�
 
 #------КОНФИГ------
 SEED = 42
-N_CLIENTS = 500
+N_CLIENTS = 2000
 N_ROWS = 50000
 FRAUD_RATE = 0.02
 OUTPUT_RAW = 'data/raw/transactions.csv'
@@ -56,7 +56,7 @@ kz_weight = 0.65
 other_countries = [c for c in CITY_COUNTRY.keys() if c != 'KZ']
 other_weight = (1.0 - kz_weight) / len(other_countries)
 MERCHANTS = {
-    #MCC : (name_template, avg_amount, std_amount)
+    #MCC : (name_template, avg_a mount, std_amount)
     5411:('Supermarket {}', 5000, 3000), #продукты
     5812:('Cafe and restaraunts {}', 3000, 2000), #рестораны
     5912:('Pharmacy {}', 2000, 1500), #Аптеки
@@ -66,7 +66,24 @@ MERCHANTS = {
     7011:('Hotel {}', 30000, 20000), #отели
     4816:('Digital Service {}', 5000, 4000), #подписки/IT
     5944:('Jewelry {}', 50000, 40000), # ювелирные (риск)
-    5065:('Elecrtronics {}', 40000, 30000) #Электроника
+    5065:('Elecrtronics {}', 40000, 30000), #Электроника
+    6012: ('P2P Transfer {}', 300_000, 150_000),
+    4829: ('Money Transfer {}', 250_000, 100_000),
+    5966: ('Online Shop {}', 80_000, 40_000),
+    5967: ('Adult Content {}', 50_000, 30_000),
+    5968: ('Subscription {}', 40_000, 20_000),
+    6051: ('Currency Exchange {}', 200_000, 100_000),
+    6211: ('Securities {}', 500_000, 200_000),
+    6536: ('Wallet Transfer {}', 150_000, 80_000),
+    6537: ('Wallet Transfer {}', 150_000, 80_000),
+    6538: ('Wallet Transfer {}', 150_000, 80_000),
+    6540: ('Prepaid Load {}', 100_000, 50_000),
+    7273: ('Dating Service {}', 30_000, 15_000),
+    7800: ('Lottery {}', 60_000, 30_000),
+    7801: ('Casino {}', 100_000, 50_000),
+    7802: ('Racing {}', 80_000, 40_000),
+    7995: ('Gambling {}', 120_000, 60_000)
+
 }
 
 mccs = ['5691', '5812', '5814', '5815', '5816', '5817', '5818', '5819', '5820', '5821',
@@ -85,6 +102,15 @@ mccs = ['5691', '5812', '5814', '5815', '5816', '5817', '5818', '5819', '5820', 
             '6074', '6075', '6076', '6077', '6078', '6079', '6080', '6081', '6082', '6083',
             '6084', '6085', '6086', '6087', '6088', '6089', '6090', '6091', '6092', '6093',
             '6094', '6095', '6096', '6097', '6098', '6099', '6100', '6101', '6102', '6103']
+
+
+
+HIGH_RISK_MCCS = [
+    '4829', '5966', '5967', '5968', '6012', '6051', '6211',
+    '6536', '6537', '6538', '6540', '7273', '7800', '7801', '7802', '7995'
+]
+
+
 
 
 POS_MODES = ['0710 - Contactless - VSDC chip',
@@ -126,7 +152,7 @@ PRODUCT_NAMES = [
         '1308282001: Other Transaction(International)'
     ]
 
-TRX_TYPES = ['PURCHASE', 'WITHDRAWAL', 'REFUND', 'TRANSFER']
+TRX_TYPES = ['POS', 'ATM', 'WWW']
 
 #----Генерация клиентов-----
 def make_clients(n:int) -> pd.DataFrame:
@@ -168,15 +194,17 @@ def normal_transaction(client: pd.Series, trx_date: datetime) -> dict:
         "MCC":                mcc,
         "POS_MODE":           pos_mode,
         "PRODUCT_NAME":       client["product"],
-        "SETTLEMENT_AMOUNT":  round(amount, 2),
+        "SETTLEMENT_AMOUNT":  round(amount * rng.uniform(0.97,1.00),2),
         "SALES_AMOUNT":       round(amount * rng.uniform(0.97, 1.00), 2),
-        "TRX_TYPE":           rng.choice(TRX_TYPES, p=[0.75, 0.15, 0.05, 0.05]),
+        "TRX_TYPE":           rng.choice(TRX_TYPES, p=[0.70, 0.20, 0.10]),
         "IS_FRAUD":           0,
     }
 
 #-----Фродовые паттерны------
 FRAUD_PATTERNS = ["high_amount", "foreign_location", "unusual_hour",
                   "card_testing", "mcc_mismatch"]
+
+print('ms teams is trash, copilot also')
 
 def fraud_transaction(client: pd.Series, trx_date: datetime) -> dict:
     """Берём нормальную транзакцию и «ломаем» её одним из паттернов."""
@@ -185,7 +213,7 @@ def fraud_transaction(client: pd.Series, trx_date: datetime) -> dict:
 
     if pattern == "high_amount":
         # Аномально большой чек
-        row["SETTLEMENT_AMOUNT"] = round(float(client["avg_amount"]) * rng.uniform(10, 50), 2)
+        row["SETTLEMENT_AMOUNT"] = round(float(client["avg_amount"]) * rng.uniform(3, 10), 2)
         row["SALES_AMOUNT"]      = row["SETTLEMENT_AMOUNT"]
 
     elif pattern == "foreign_location":
@@ -194,37 +222,38 @@ def fraud_transaction(client: pd.Series, trx_date: datetime) -> dict:
         nat_code = rng.choice(suspicious)
         row["CITY_NAME"] = rng.choice(CITY_COUNTRY[nat_code])
         row["NATIONAL_CODE"] = nat_code
-        row["POS_MODE"]       = "ECOMMERCE"
+        row["POS_MODE"]   = "ECOMMERCE"
 
     elif pattern == "unusual_hour":
-        # Транзакция в 0–5      ночи
+        # Транзакция в 0–5 ночи
         night_hour = int(rng.integers(0, 5))
         d = trx_date.replace(hour=night_hour,
                              minute=int(rng.integers(0, 59)))
         row["TRANSACTION_DATE"]   = d.strftime("%Y-%m-%d %H:%M:%S")
         row["AUTHORIZATION_DATE"] = (d + timedelta(seconds=5)).strftime("%Y-%m-%d %H:%M:%S")
-        row["SETTLEMENT_AMOUNT"]  = round(float(client["avg_amount"]) * rng.uniform(5, 20), 2)
+        row["SETTLEMENT_AMOUNT"]  = round(float(client["avg_amount"]) * rng.uniform(2, 5), 2)
 
     elif pattern == "card_testing":
         # Много мелких транзакций (имитируется суммой < 100)
-        row["SETTLEMENT_AMOUNT"] = round(rng.uniform(1, 99), 2)
+        row["SETTLEMENT_AMOUNT"] = round(rng.uniform(100, 200), 2)
         row["SALES_AMOUNT"]      = row["SETTLEMENT_AMOUNT"]
         row["MCC"]               = '4816'  # цифровые сервисы
 
     elif pattern == "mcc_mismatch":
         # Ювелирка или электроника с необычным POS
-        row["MCC"]               = rng.choice(['5944', '5065'])
-        row["SETTLEMENT_AMOUNT"] = round(rng.uniform(80_000, 300_000), 2)
+        row["MCC"]               = str(rng.choice(HIGH_RISK_MCCS))
+        row["SETTLEMENT_AMOUNT"] = round(rng.uniform(150000, 500000), 2)
         row["POS_MODE"]          = "MAGNETIC"
         row["MERCHANT_NAME"]     = "Unknown Merchant"
 
     row["IS_FRAUD"] = 1
     return row
 #-----Основной генератор-------
+
 def generate(n_rows: int = N_ROWS) -> pd.DataFrame:
     clients  = make_clients(N_CLIENTS)
     start_dt = datetime(2024, 1, 1)
-    end_dt   = datetime(2024, 12, 31)
+    end_dt   = datetime(2024, 1, 7)
     delta_s  = int((end_dt - start_dt).total_seconds())
 
     rows = []
@@ -264,6 +293,7 @@ def save(df: pd.DataFrame):
     print(f"   Норма:  {(~df['IS_FRAUD'].astype(bool)).sum():,}")
     print(f"   RAW  → {OUTPUT_RAW}")
     print(f"   PROC → {OUTPUT_PROC}")
+
 
 
 if __name__ == "__main__":
