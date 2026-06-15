@@ -203,6 +203,15 @@ def generate_data(num_records: int = 20_000,
     mccs_weights = list(legit_mccs_with_weights.values())
     hour_weights = [1,1,1,1,2,3,5,10,15,20,25,30,35,35,30,25,30,35,40,35,25,15,10,5]
 
+    _h = list(range(24))
+    fraud_hour_any_time    = [1] * 24
+    fraud_hour_night_biased = [
+        9, 9, 8, 7, 6, 4,
+        2, 2, 3, 3, 3, 3,
+        3, 3, 3, 3, 4, 4,
+        5, 6, 7, 8, 9, 9,
+    ]
+
     for _ in range(num_normal):
         uid     = f"{random.choice(['P','C'])}{random.randint(1, 5000):09d}"
         profile = user_profiles[uid]
@@ -265,7 +274,7 @@ def generate_data(num_records: int = 20_000,
             mcc    = random.choice(["5411", "6051", "7995"])
             amt    = profile["avg_amount"] * random.uniform(6.0, 10.0)
             trx_dt = base_date + timedelta(
-                days=d_off, hours=random.choice([1, 2, 3, 4, 5]),
+                days=d_off, hours=random.choices(_h, weights=fraud_hour_any_time, k=1)[0],
                 minutes=random.randint(0, 59), seconds=random.randint(0, 59),
             )
             auth_dt      = trx_dt + timedelta(seconds=1)
@@ -306,7 +315,7 @@ def generate_data(num_records: int = 20_000,
             mcc    = random.choice(cashout_mccs)
             amt    = random.uniform(150_000.0, 450_000.0)
             trx_dt = base_date + timedelta(
-                days=d_off, hours=random.choice([23, 0, 1, 2]),
+                days=d_off, hours=random.choices(_h, weights=fraud_hour_night_biased, k=1)[0],
                 minutes=random.randint(0, 59), seconds=random.randint(0, 59),
             )
             auth_dt  = trx_dt + timedelta(milliseconds=200)
@@ -364,7 +373,7 @@ def generate_data(num_records: int = 20_000,
             nat_code     = profile["home_country"]
             city         = random.choice(country_city_map[nat_code])
             cluster_start = base_date + timedelta(
-                days=d_off, hours=random.choice([23, 0, 1, 2]),
+                days=d_off, hours=random.choices(_h, weights=fraud_hour_night_biased, k=1)[0],
                 minutes=random.randint(0, 20),
             )
             for j in range(random.randint(3, 5)):
