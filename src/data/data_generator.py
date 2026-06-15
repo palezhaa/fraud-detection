@@ -1,305 +1,340 @@
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
 import os
-
-'''
-Генератор синтетических банковских транзакций для детекции фрода
-Seed фиксирован - данные воспроизводимы при любом запуске
-'''
-
-
-#------КОНФИГ------
-SEED = 42
-N_CLIENTS = 2000
-N_ROWS = 50000
-FRAUD_RATE = 0.02
-OUTPUT_RAW = 'data/raw/transactions.csv'
-OUTPUT_PROC = 'data/processed/transactions_labeled.csv'
-
-rng = np.random.default_rng(SEED)
-
-#-----Справочники-----
-CITY_COUNTRY = {
-    'KZ': ['ALMATY', 'ASTANA', 'AKTAU', 'ATYRAU', 'TALDYKORGAN', 'SEMEY', 'SHYMKENT', 'TARAZ', 'KARAGANDA', 'KOSTANAY', 'PAVLODAR'],
-    'RU': ['MOSCOW', 'SAINT PETERSBURG', 'NOVOSIBIRSK', 'YEKATERINBURG'],
-    'US': ['NEW YORK', 'LOS ANGELES', 'CHICAGO', 'MIAMI', 'SAN FRANCISCO'],
-    'CN': ['BEIJING', 'SHANGHAI', 'SHENZHEN', 'GUANGZHOU'],
-    'IN': ['DELHI', 'MUMBAI', 'BANGALORE'],
-    'BR': ['SAO PAULO', 'RIO DE JANEIRO', 'BRASILIA'],
-    'DE': ['BERLIN', 'MUNICH', 'FRANKFURT'],
-    'FR': ['PARIS', 'LYON', 'MARSEILLE'],
-    'GB': ['LONDON', 'MANCHESTER', 'EDINBURGH'],
-    'JP': ['TOKYO', 'OSAKA', 'KYOTO'],
-    'KR': ['SEOUL', 'BUSAN'],
-    'AU': ['SYDNEY', 'MELBOURNE'],
-    'CA': ['TORONTO', 'VANCOUVER', 'MONTREAL'],
-    'MX': ['MEXICO CITY', 'CANCUN'],
-    'IT': ['ROME', 'MILAN', 'VENICE'],
-    'ES': ['MADRID', 'BARCELONA'],
-    'NL': ['AMSTERDAM', 'ROTTERDAM'],
-    'SE': ['STOCKHOLM', 'GOTHENBURG'],
-    'CH': ['ZURICH', 'GENEVA'],
-    'AE': ['DUBAI', 'ABU DHABI'],
-    'TR': ['ISTANBUL', 'ANTALYA', 'ANKARA'],
-    'UZ': ['TASHKENT', 'SAMARKAND', 'BUKHARA'],
-    'KG': ['BISHKEK', 'OSH'],
-    'TH': ['BANGKOK', 'PHUKET'],
-    'GE': ['TBILISI', 'BATUMI'],
-    'MY': ['KUALA LUMPUR'],
-    'SGP': ['SINGAPORE'],
-    'EG': ['CAIRO', 'SHARM EL SHEIKH'],
-    'PL': ['WARSAW', 'KRAKOW']
-}
-
-kz_weight = 0.65
-other_countries = [c for c in CITY_COUNTRY.keys() if c != 'KZ']
-other_weight = (1.0 - kz_weight) / len(other_countries)
-MERCHANTS = {
-    #MCC : (name_template, avg_a mount, std_amount)
-    5411:('Supermarket {}', 5000, 3000), #продукты
-    5812:('Cafe and restaraunts {}', 3000, 2000), #рестораны
-    5912:('Pharmacy {}', 2000, 1500), #Аптеки
-    4111:('Transport {}', 1000, 500), # транспорт
-    5999:('Online store {}', 8000, 6000), # разное онлайн
-    6011:('ATM Withdrawal', 20000, 15000), # баноматы
-    7011:('Hotel {}', 30000, 20000), #отели
-    4816:('Digital Service {}', 5000, 4000), #подписки/IT
-    5944:('Jewelry {}', 50000, 40000), # ювелирные (риск)
-    5065:('Elecrtronics {}', 40000, 30000), #Электроника
-    6012: ('P2P Transfer {}', 300_000, 150_000),
-    4829: ('Money Transfer {}', 250_000, 100_000),
-    5966: ('Online Shop {}', 80_000, 40_000),
-    5967: ('Adult Content {}', 50_000, 30_000),
-    5968: ('Subscription {}', 40_000, 20_000),
-    6051: ('Currency Exchange {}', 200_000, 100_000),
-    6211: ('Securities {}', 500_000, 200_000),
-    6536: ('Wallet Transfer {}', 150_000, 80_000),
-    6537: ('Wallet Transfer {}', 150_000, 80_000),
-    6538: ('Wallet Transfer {}', 150_000, 80_000),
-    6540: ('Prepaid Load {}', 100_000, 50_000),
-    7273: ('Dating Service {}', 30_000, 15_000),
-    7800: ('Lottery {}', 60_000, 30_000),
-    7801: ('Casino {}', 100_000, 50_000),
-    7802: ('Racing {}', 80_000, 40_000),
-    7995: ('Gambling {}', 120_000, 60_000)
-
-}
-
-mccs = ['5691', '5812', '5814', '5815', '5816', '5817', '5818', '5819', '5820', '5821',
-            '5912', '5921', '5931', '5932', '5933', '5940', '5941', '5942', '5943', '5944',
-            '5945', '5946', '5947', '5948', '5949', '5950', '5960', '5961', '5962', '5963',
-            '5964', '5965', '5966', '5967', '5968', '5969', '5970', '5971', '5972', '5973',
-            '5974', '5975', '5976', '5977', '5978', '5979', '5980', '5981', '5982', '5983',
-            '5984', '5985', '5986', '5987', '5988', '5989', '5990', '5991', '5992', '5993',
-            '5994', '5995', '5996', '5997', '5998', '5999', '6010', '6011', '6012', '6013',
-            '6014', '6015', '6016', '6017', '6018', '6019', '6020', '6021', '6022', '6023',
-            '6024', '6025', '6026', '6027', '6028', '6029', '6030', '6031', '6032', '6033',
-            '6034', '6035', '6036', '6037', '6038', '6039', '6040', '6041', '6042', '6043',
-            '6044', '6045', '6046', '6047', '6048', '6049', '6050', '6051', '6052', '6053',
-            '6054', '6055', '6056', '6057', '6058', '6059', '6060', '6061', '6062', '6063',
-            '6064', '6065', '6066', '6067', '6068', '6069', '6070', '6071', '6072', '6073',
-            '6074', '6075', '6076', '6077', '6078', '6079', '6080', '6081', '6082', '6083',
-            '6084', '6085', '6086', '6087', '6088', '6089', '6090', '6091', '6092', '6093',
-            '6094', '6095', '6096', '6097', '6098', '6099', '6100', '6101', '6102', '6103']
+import random
+from datetime import datetime, timedelta
+import numpy as np
+import pandas as pd
 
 
+def generate_data(num_records: int = 50_000,  # Вернули объем как в первой версии
+                  fraud_ratio: float = 0.02,  # Установили 2% фрода под конфиг правил
+                  seed: int = 42) -> pd.DataFrame:
+    np.random.seed(seed)
+    random.seed(seed)
 
-HIGH_RISK_MCCS = [
-    '4829', '5966', '5967', '5968', '6012', '6051', '6211',
-    '6536', '6537', '6538', '6540', '7273', '7800', '7801', '7802', '7995'
-]
-
-
-
-
-POS_MODES = ['0710 - Contactless - VSDC chip',
-        '0120 - Keyin',
-        '0730 - Contactless - VSDC chip',
-        '1000 - Credential on file',
-        '0720 - Contactless - VSDC magstripe',
-        '0110 - Swipe',
-        '0800 - Contactless - Magstripe',
-        '0000 - Unknown',
-        '0510 - Contactless - Magstripe',
-        '0001 - E-commerce',
-        '0002 - Mail/Phone order',
-        '0003 - Recurring',
-        '0004 - Installment',
-        '0005 - Preauthorized',
-        '0006 - Cash',
-        '0007 - Other',
-        '0008 - Not used' ]
-
-PRODUCT_NAMES = [
-        '1308112001: Debit Purchase Transaction(Domestic)',
-        '1308122001: Debit Purchase Transaction(International)',
-        '1308132001: Credit Purchase Transaction(Domestic)',
-        '1308142001: Credit Purchase Transaction(International)',
-        '1308152001: Prepaid Purchase Transaction(Domestic)',
-        '1308162001: Prepaid Purchase Transaction(International)',
-        '1308172001: Cash Withdrawal Transaction(Domestic)',
-        '1308182001: Cash Withdrawal Transaction(International)',
-        '1308192001: Balance Inquiry Transaction(Domestic)',
-        '1308202001: Balance Inquiry Transaction(International)',
-        '1308212001: Refund Transaction(Domestic)',
-        '1308222001: Refund Transaction(International)',
-        '1308232001: Transfer Transaction(Domestic)',
-        '1308242001: Transfer Transaction(International)',
-        '1308252001: Bill Payment Transaction(Domestic)',
-        '1308262001: Bill Payment Transaction(International)',
-        '1308272001: Other Transaction(Domestic)',
-        '1308282001: Other Transaction(International)'
-    ]
-
-TRX_TYPES = ['POS', 'ATM', 'WWW']
-
-#----Генерация клиентов-----
-def make_clients(n:int) -> pd.DataFrame:
-    '''Базовый профиль каждого клиента: средний чек, любимый МСС, продукт'''
-    client_ids = [f"C{str(i).zfill(6)}" for i in range(1, n + 1)]
-    avg_amounts = rng.lognormal(mean=8.5, sigma=0.8, size=n)  # ~5 000 тг
-    fav_mcc = rng.choice(mccs, size=n)
-    product = rng.choice(PRODUCT_NAMES, size=n)
-    return pd.DataFrame({
-        "client_id": client_ids,
-        "avg_amount": avg_amounts,
-        "fav_mcc": fav_mcc,
-        "product": product,
-    })
-
-
-#-----Генерация одной «нормальной» транзакции---------
-def normal_transaction(client: pd.Series, trx_date: datetime) -> dict:
-    mcc = int(rng.choice(list(MERCHANTS.keys())))
-    tmpl, avg, std = MERCHANTS[mcc]
-    amount    = max(100, rng.normal(avg, std))
-    nat_code = rng.choice(list(CITY_COUNTRY.keys()),
-                          p=[kz_weight] + [other_weight] * len(other_countries))
-    city = rng.choice(CITY_COUNTRY[nat_code])
-    pos_mode  = rng.choice(POS_MODES)
-    merchant_no = f"M{rng.integers(10000, 99999)}"
-    merchant_name = tmpl.format(rng.integers(1, 999)) if "{}" in tmpl else tmpl
-
-    auth_date = trx_date + timedelta(seconds=int(rng.integers(1, 120)))
-
-    return {
-        "MEMBER_NO":          client["client_id"],
-        "TRANSACTION_DATE":   trx_date.strftime("%Y-%m-%d %H:%M:%S"),
-        "AUTHORIZATION_DATE": auth_date.strftime("%Y-%m-%d %H:%M:%S"),
-        "MERCHANT_NO":        merchant_no,
-        "MERCHANT_NAME":      merchant_name,
-        "CITY_NAME":          city,
-        "NATIONAL_CODE":      nat_code,
-        "MCC":                mcc,
-        "POS_MODE":           pos_mode,
-        "PRODUCT_NAME":       client["product"],
-        "SETTLEMENT_AMOUNT":  round(amount * rng.uniform(0.97,1.00),2),
-        "SALES_AMOUNT":       round(amount * rng.uniform(0.97, 1.00), 2),
-        "TRX_TYPE":           rng.choice(TRX_TYPES, p=[0.70, 0.20, 0.10]),
-        "IS_FRAUD":           0,
+    legit_mccs_with_weights = {
+        "5411": 0.35, "5499": 0.10, "5814": 0.15, "4121": 0.12,
+        "5331": 0.08, "5812": 0.05, "5912": 0.04, "5541": 0.03,
+        "5691": 0.02, "5977": 0.01, "7995": 0.01, "6051": 0.01,
+        "5816": 0.02, "5999": 0.01, "6011": 0.05,
     }
 
-#-----Фродовые паттерны------
-FRAUD_PATTERNS = ["high_amount", "foreign_location", "unusual_hour",
-                  "card_testing", "mcc_mismatch"]
+    gambling_mccs = ["7995", "7800", "7801", "7802"]
+    crypto_invest_mccs = ["6051", "6211", "6282", "6529"]
+    card_testing_mccs = ["5815", "5816", "5817", "5818", "5734", "5942", "5999"]
+    cashout_mccs = ["4829", "6536", "6537", "6540", "6012"]  # Добавили 6012 для Правила 1
 
-print('ms teams is trash, copilot also')
+    MCC_MERCHANTS: dict[str, list[str]] = {
+        "5411": ["MAGNUM", "WILD BERRIES", "SMALL", "GALMART", "RAMSTORE"],
+        "5499": ["OLIMP_KZ", "MAGNUM", "FRESH_MARKET", "WILD BERRIES"],
+        "5814": ["KFC", "BURGER_KING", "HARDEE'S", "DODO_PIZZA"],
+        "4121": ["YANDEX TAXI", "INDRIVE", "CITYMOBIL"],
+        "5331": ["TARGET", "WAYFAIR", "H&M", "FIX_PRICE"],
+        "5812": ["STARBUCKS", "COSTA_COFFEE", "KFC"],
+        "5912": ["APTEKA_EVROPA", "PHARMACY_24", "GREEN_APTEKA"],
+        "5541": ["KAZMUNAYGAS", "SHELL", "HELIOS_PETROLEUM"],
+        "5691": ["ZARA", "H&M", "UNIQLO", "GAP", "NIKE", "ADIDAS"],
+        "5977": ["SEPHORA", "RIVE_GAUCHE", "L'ETOILE"],
+        "7995": ["1XBET", "OLIMP_BET", "PARIMATCH"],
+        "6051": ["BINANCE", "BYBIT", "CRYPTO_EXCHANGE"],
+        "5816": ["STEAM_GAMES", "GOOGLE_PLAY", "APPLE STORE", "PLAYSTATION_STORE"],
+        "5999": ["AMAZON", "EBAY", "WAYFAIR"],
+        "6011": ["ATM_HALYK_KZ", "ATM_KASPI_KZ", "ATM_SBERBANK_KZ", "ATM_FORTEBANK"],
+    }
+    GENERIC_MERCHANTS = ["WALMART", "AMAZON", "TARGET", "COSTCO"]
 
-def fraud_transaction(client: pd.Series, trx_date: datetime) -> dict:
-    """Берём нормальную транзакцию и «ломаем» её одним из паттернов."""
-    row = normal_transaction(client, trx_date)
-    pattern = rng.choice(FRAUD_PATTERNS)
+    pos_modes_ecom = ["0001 - E-commerce", "0002 - Mail/Phone order", "0003 - Recurring", "1000 - Credential on file"]
+    pos_modes_pos = ["0710 - Contactless - VSDC chip", "0730 - Contactless - VSDC chip", "0110 - Swipe", "0120 - Keyin"]
+    pos_modes_atm = ["0006 - Cash", "0110 - Swipe"]
 
-    if pattern == "high_amount":
-        # Аномально большой чек
-        row["SETTLEMENT_AMOUNT"] = round(float(client["avg_amount"]) * rng.uniform(3, 10), 2)
-        row["SALES_AMOUNT"]      = row["SETTLEMENT_AMOUNT"]
+    product_names_domestic = [
+        "1308112001: Debit Purchase Transaction(Domestic)",
+        "1308132001: Credit Purchase Transaction(Domestic)",
+        "1308172001: Cash Withdrawal Transaction(Domestic)",
+    ]
+    product_names_intl = [
+        "1308122001: Debit Purchase Transaction(International)",
+        "1308142001: Credit Purchase Transaction(International)",
+        "1308182001: Cash Withdrawal Transaction(International)",
+    ]
 
-    elif pattern == "foreign_location":
-        # Транзакция из подозрительной страны
-        suspicious = [c for c in CITY_COUNTRY.keys() if c != 'KZ']
-        nat_code = rng.choice(suspicious)
-        row["CITY_NAME"] = rng.choice(CITY_COUNTRY[nat_code])
-        row["NATIONAL_CODE"] = nat_code
-        row["POS_MODE"]   = "ECOMMERCE"
+    country_city_map = {
+        "KZ": ["ALMATY", "ASTANA", "AKTAU", "ATYRAU", "KARAGANDA", "SHYMKENT"],
+        "RU": ["MOSCOW", "SAINT PETERSBURG"],
+        "US": ["NEW YORK", "LOS ANGELES", "MIAMI"],
+        "CN": ["BEIJING", "SHANGHAI"],
+        "GB": ["LONDON", "MANCHESTER"],
+        "AE": ["DUBAI", "ABU DHABI"],
+        "TR": ["ISTANBUL", "ANTALYA"],
+    }
 
-    elif pattern == "unusual_hour":
-        # Транзакция в 0–5 ночи
-        night_hour = int(rng.integers(0, 5))
-        d = trx_date.replace(hour=night_hour,
-                             minute=int(rng.integers(0, 59)))
-        row["TRANSACTION_DATE"]   = d.strftime("%Y-%m-%d %H:%M:%S")
-        row["AUTHORIZATION_DATE"] = (d + timedelta(seconds=5)).strftime("%Y-%m-%d %H:%M:%S")
-        row["SETTLEMENT_AMOUNT"]  = round(float(client["avg_amount"]) * rng.uniform(2, 5), 2)
+    nat_codes = list(country_city_map.keys())
+    nat_weights = [0.85] + [0.15 / (len(nat_codes) - 1)] * (len(nat_codes) - 1)
 
-    elif pattern == "card_testing":
-        # Много мелких транзакций (имитируется суммой < 100)
-        row["SETTLEMENT_AMOUNT"] = round(rng.uniform(100, 200), 2)
-        row["SALES_AMOUNT"]      = row["SETTLEMENT_AMOUNT"]
-        row["MCC"]               = '4816'  # цифровые сервисы
+    # Инициализация профилей
+    user_profiles: dict[str, dict] = {}
+    for prefix in ["P", "C"]:
+        for i in range(1, 2001):  # Сделали 2000 клиентов для плотности транзакций
+            uid = f"{prefix}{i:06d}"
+            home = "KZ" if random.random() < 0.92 else random.choice(nat_codes)
+            user_profiles[uid] = {
+                "home_country": home,
+                "avg_amount": float(np.random.lognormal(mean=8.5, sigma=0.6)),
+                "seen_countries": {home},
+            }
 
-    elif pattern == "mcc_mismatch":
-        # Ювелирка или электроника с необычным POS
-        row["MCC"]               = str(rng.choice(HIGH_RISK_MCCS))
-        row["SETTLEMENT_AMOUNT"] = round(rng.uniform(150000, 500000), 2)
-        row["POS_MODE"]          = "MAGNETIC"
-        row["MERCHANT_NAME"]     = "Unknown Merchant"
+    base_date = datetime(2026, 6, 9)
+    num_fraud = int(num_records * fraud_ratio)
+    num_normal = num_records - num_fraud
 
-    row["IS_FRAUD"] = 1
-    return row
-#-----Основной генератор-------
+    def _pos_mode(trx_type: str) -> str:
+        if trx_type == "WWW": return random.choice(pos_modes_ecom)
+        if trx_type == "ATM": return random.choice(pos_modes_atm)
+        return random.choice(pos_modes_pos)
 
-def generate(n_rows: int = N_ROWS) -> pd.DataFrame:
-    clients  = make_clients(N_CLIENTS)
-    start_dt = datetime(2024, 1, 1)
-    end_dt   = datetime(2024, 1, 7)
-    delta_s  = int((end_dt - start_dt).total_seconds())
+    def _product_name(nat_code: str, trx_type: str = "POS") -> str:
+        pool = product_names_domestic if nat_code == "KZ" else product_names_intl
+        if trx_type == "ATM": return pool[2]
+        return random.choice(pool[:2])
 
-    rows = []
-    n_fraud  = int(n_rows * FRAUD_RATE)
-    n_normal = n_rows - n_fraud
+    def _merchant_name(mcc: str) -> str:
+        return random.choice(MCC_MERCHANTS.get(mcc, GENERIC_MERCHANTS))
 
-    fraud_indices  = set(rng.choice(n_rows, size=n_fraud, replace=False))
+    def _trx_type_by_mcc(mcc: str) -> str:
+        if mcc in {"5816", "6051", "5999"}: return "WWW"
+        if mcc == "6011": return "ATM"
+        return random.choices(["POS", "WWW"], weights=[0.80, 0.20], k=1)[0]
 
-    for i in range(n_rows):
-        client   = clients.iloc[int(rng.integers(0, N_CLIENTS))]
-        trx_date = start_dt + timedelta(seconds=int(rng.integers(0, delta_s)))
+    def _build(user_id: str, trx_dt: datetime, auth_dt: datetime, merchant_no: str,
+               merchant_name: str, city: str, nat_code: str, mcc: str, pos_mode: str,
+               product_name: str, amount: float, trx_type: str, is_fraud: int = 0) -> dict:
+        amt = round(amount, 2)
+        return {
+            "MEMBER_NO": user_id,  # Переименовали под логику правил
+            "TRANSACTION_DATE": trx_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "AUTHORIZATION_DATE": auth_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "MERCHANT_NO": merchant_no,
+            "MERCHANT_NAME": merchant_name,
+            "CITY_NAME": city,
+            "NATIONAL_CODE": nat_code,
+            "MCC": str(mcc),
+            "POS_MODE": pos_mode,
+            "PRODUCT_NAME": product_name,
+            "SETTLEMENT_AMOUNT": amt,
+            "SALES_AMOUNT": amt,
+            "TRX_TYPE": trx_type,
+            "IS_FRAUD": is_fraud,
+        }
 
-        if i in fraud_indices:
-            row = fraud_transaction(client, trx_date)
+    data: list[dict] = []
+    mccs_list = list(legit_mccs_with_weights.keys())
+    mccs_weights = list(legit_mccs_with_weights.values())
+    hour_weights = [1, 1, 1, 1, 2, 3, 5, 10, 15, 20, 25, 30, 35, 35, 30, 25, 30, 35, 40, 35, 25, 15, 10, 5]
+    _h = list(range(24))
+
+    fraud_hour_any_time = [1] * 24
+    fraud_hour_night_biased = [10, 10, 10, 10, 10, 8, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 3, 4, 5, 6, 8, 10]
+
+    # --- ГЕНЕРАЦИЯ ЛЕГИТИМНЫХ ТРАНЗАКЦИЙ ---
+    print("Генерация легитимных транзакций...")
+    for _ in range(num_normal):
+        uid = f"{random.choice(['P', 'C'])}{random.randint(1, 2000):06d}"
+        profile = user_profiles[uid]
+
+        trx_dt = base_date + timedelta(
+            days=random.randint(0, 6),  # сузили до 7 дней как в правилах
+            hours=random.choices(range(24), weights=hour_weights, k=1)[0],
+            minutes=random.randint(0, 59), seconds=random.randint(0, 59),
+        )
+        auth_dt = trx_dt + timedelta(seconds=random.randint(1, 3))
+        mcc = random.choices(mccs_list, weights=mccs_weights, k=1)[0]
+        trx_type = _trx_type_by_mcc(mcc)
+
+        if trx_type == "ATM":
+            amt = round(float(np.random.lognormal(mean=np.log(20_000.0), sigma=0.5)), -3)
+            amt = min(max(2000.0, amt), 250_000.0)  # Ограничили, чтобы не пересекалось с фродом в банкоматах
         else:
-            row = normal_transaction(client, trx_date)
-        rows.append(row)
+            amt = max(150.0, float(np.random.lognormal(mean=np.log(profile["avg_amount"]), sigma=0.8)))
+            if mcc in gambling_mccs + crypto_invest_mccs:
+                amt *= random.uniform(1.1, 1.8)
 
-    df = pd.DataFrame(rows).sort_values("TRANSACTION_DATE").reset_index(drop=True)
+        nat_code = profile["home_country"] if random.random() < 0.96 else \
+        random.choices(nat_codes, weights=nat_weights, k=1)[0]
+
+        data.append(_build(
+            uid, trx_dt, auth_dt,
+            str(random.randint(1_000_000_000, 9_999_999_999)),
+            _merchant_name(mcc), random.choice(country_city_map[nat_code]),
+            nat_code, mcc, _pos_mode(trx_type), _product_name(nat_code, trx_type),
+            amt, trx_type,
+        ))
+
+    # --- ГЕНЕРАЦИЯ ФРОДОВЫХ ПАТТЕРНОВ ---
+    print("Генерация фродовых паттернов под бизнес-правила...")
+    fraud_patterns = [
+        "F005_atypical_amount", "F007_card_testing", "F038_cashout",
+        "F020_velocity_countries", "F006_velocity_cluster", "F038_atm_cashout"
+    ]
+    fraud_weights = [0.25, 0.15, 0.20, 0.15, 0.10, 0.15]
+    generated_fraud = 0
+
+    while generated_fraud < num_fraud:
+        uid = f"{random.choice(['P', 'C'])}{random.randint(1, 2000):06d}"
+        profile = user_profiles[uid]
+        d_off = random.randint(0, 6)
+        pattern = random.choices(fraud_patterns, weights=fraud_weights, k=1)[0]
+
+        # Паттерн: Крупный чек (Триггерит Правило 1, 4 или 11)
+        if pattern == "F005_atypical_amount":
+            mcc = random.choice(["6012", "6051", "7995", "5411"])
+            # Ставим крупную сумму для детекции правил
+            amt = random.uniform(410_000.0, 550_000.0) if mcc in ["6012", "6051", "7995"] else random.uniform(60_000.0,
+                                                                                                              120_000.0)
+
+            # Смещение на ночь для Правила 4
+            hour = random.choices(_h, weights=fraud_hour_night_biased, k=1)[0]
+            trx_dt = base_date + timedelta(days=d_off, hours=hour, minutes=random.randint(0, 59),
+                                           seconds=random.randint(0, 59))
+
+            nat_code = profile["home_country"]
+            data.append(_build(
+                uid, trx_dt, trx_dt + timedelta(seconds=1),
+                str(random.randint(1_000_000_000, 9_999_999_999)),
+                "HIGH_RISK_MERCHANT" if mcc != "5411" else "MAGNUM_VIP",
+                random.choice(country_city_map[nat_code]),
+                nat_code, mcc, "0001 - E-commerce", _product_name(nat_code),
+                amt, "WWW", is_fraud=1
+            ))
+            generated_fraud += 1
+
+        # Паттерн: Card Testing (Триггерит Правило 3 - много мелких транзакций)
+        elif pattern == "F007_card_testing":
+            mcc = "5816"
+            merchant_no = str(random.randint(1_000_000_000, 9_999_999_999))
+            nat_code = profile["home_country"]
+            cluster_start = base_date + timedelta(days=d_off, hours=random.randint(9, 21),
+                                                  minutes=random.randint(0, 20))
+
+            for j in range(random.randint(5, 7)):  # Строго от 5 транзакций
+                if generated_fraud >= num_fraud: break
+                dt = cluster_start + timedelta(minutes=j * random.randint(1, 4))  # в пределах 30 минут
+                data.append(_build(
+                    uid, dt, dt + timedelta(seconds=1),
+                    merchant_no, "STEAM_GAMES", random.choice(country_city_map[nat_code]),
+                    nat_code, mcc, "0001 - E-commerce", _product_name(nat_code),
+                    random.uniform(500.0, 1500.0), "WWW", is_fraud=1  # Сумма < 2000
+                ))
+                generated_fraud += 1
+
+        # Паттерн: Ручной ввод на крупные суммы (Триггерит Правило 7)
+        elif pattern == "F038_cashout":
+            mcc = random.choice(cashout_mccs)
+            amt = random.uniform(210_000.0, 350_000.0)  # Сумма > 200к для правила 7
+            trx_dt = base_date + timedelta(days=d_off, hours=random.randint(9, 18), minutes=random.randint(0, 59))
+            nat_code = profile["home_country"]
+
+            data.append(_build(
+                uid, trx_dt, trx_dt + timedelta(seconds=2),
+                str(random.randint(1_000_000_000, 9_999_999_999)),
+                "MANUAL_CASH_OUT", random.choice(country_city_map[nat_code]),
+                nat_code, mcc, "0120 - Keyin", _product_name(nat_code),  # Подставили Keyin!
+                amt, "POS", is_fraud=1
+            ))
+            generated_fraud += 1
+
+        # Паттерн: Скорость по странам (Триггерит Правило 10 и Правило 6/8)
+        elif pattern == "F020_velocity_countries":
+            if profile["home_country"] != "KZ": continue  # Генерируем только для резидентов KZ
+
+            # Сначала делаем чистую легитимную транзакцию в KZ
+            t_start = base_date + timedelta(days=d_off, hours=random.randint(10, 20), minutes=random.randint(0, 10))
+            data.append(_build(
+                uid, t_start, t_start + timedelta(seconds=2),
+                str(random.randint(1_000_000_000, 9_999_999_999)),
+                "KFC_ALMATY", "ALMATY", "KZ", "5814", "0710 - Contactless - VSDC chip",
+                _product_name("KZ"), random.uniform(2000, 5000), "POS", is_fraud=0
+            ))
+
+            # Через 15 минут прилетает фрод из-за рубежа (физически невозможно)
+            t_fraud = t_start + timedelta(minutes=15)
+            foreign_country = random.choice([c for c in nat_codes if c != "KZ"])
+
+            data.append(_build(
+                uid, t_fraud, t_fraud + timedelta(seconds=1),
+                str(random.randint(1_000_000_000, 9_999_999_999)),
+                "FOREIGN_STORE", random.choice(country_city_map[foreign_country]),
+                foreign_country, "5411", "0110 - Swipe", _product_name(foreign_country),
+                random.uniform(10000, 50000), "POS", is_fraud=1
+            ))
+            generated_fraud += 1
+
+        # Паттерн: Дроблинг и одинаковые суммы (Триггерит Правило 5 и Правило 9)
+        elif pattern == "F006_velocity_cluster":
+            mcc = "5999"
+            nat_code = profile["home_country"]
+            merchant_no = str(random.randint(1_000_000_000, 9_999_999_999))
+            cluster_start = base_date + timedelta(days=d_off, hours=random.randint(8, 22),
+                                                  minutes=random.randint(0, 30))
+            fixed_amount = random.uniform(5000, 25000)  # Одинаковая сумма для правила 9!
+
+            for j in range(3):  # Повторяем 3 раза за день на одного мерчанта (Правило 5)
+                if generated_fraud >= num_fraud: break
+                dt = cluster_start + timedelta(minutes=j * random.randint(5, 15))
+                data.append(_build(
+                    uid, dt, dt + timedelta(seconds=1),
+                    merchant_no, "AMAZON_ATTACK", random.choice(country_city_map[nat_code]),
+                    nat_code, mcc, "0001 - E-commerce", _product_name(nat_code),
+                    fixed_amount, "WWW", is_fraud=1
+                ))
+                generated_fraud += 1
+
+        # Паттерн: Серийный вынос банкомата (Триггерит Правило 2)
+        elif pattern == "F038_atm_cashout":
+            nat_code = profile["home_country"]
+            city = random.choice(country_city_map[nat_code])
+            merchant_no = str(random.randint(1_000_000_000, 9_999_999_999))
+            cluster_start = base_date + timedelta(days=d_off, hours=random.randint(12, 23),
+                                                  minutes=random.randint(0, 15))
+
+            for j in range(2):  # 2 повторения крупных снятий за день
+                if generated_fraud >= num_fraud: break
+                dt = cluster_start + timedelta(minutes=j * random.randint(4, 10))
+                # Ставим сумму строго > 300 000 тг (Правило 2)
+                atm_amount = random.uniform(310_000.0, 380_000.0)
+                data.append(_build(
+                    uid, dt, dt + timedelta(seconds=3),
+                    merchant_no, "ATM_FRAUD_LOCK", city,
+                    nat_code, "6011", "0006 - Cash", _product_name(nat_code, "ATM"),
+                    atm_amount, "ATM", is_fraud=1
+                ))
+                generated_fraud += 1
+
+    # --- СБОРКА И ИТОГОВОЕ СОРТИРОВАНИЕ ---
+    df = pd.DataFrame(data)
+    df['TRANSACTION_DATE'] = pd.to_datetime(df['TRANSACTION_DATE'])
+    df = df.sort_values("TRANSACTION_DATE").reset_index(drop=True)
+
+    # Добавляем TRX_ID в самый первый столбец, чтобы не падали правила
     df.insert(0, "TRX_ID", [f"T{str(j).zfill(8)}" for j in range(len(df))])
-    return df
 
+    # Переводим обратно даты в строковый формат для сохранения в CSV
+    df['TRANSACTION_DATE'] = df['TRANSACTION_DATE'].dt.strftime("%Y-%m-%d %H:%M:%S")
 
-#-----Сохранение------
-def save(df: pd.DataFrame):
-    os.makedirs("data/raw",       exist_ok=True)
-    os.makedirs("data/processed", exist_ok=True)
-
-    # RAW — без метки (как будто реальные данные)
-    df.drop(columns=["IS_FRAUD"]).to_csv(OUTPUT_RAW,  index=False)
-
-    # PROCESSED — с меткой (для обучения модели)
-    df.to_csv(OUTPUT_PROC, index=False)
-
-    print(f"   Сгенерировано {len(df):,} транзакций")
-    print(f"   Фрод:   {df['IS_FRAUD'].sum():,}  ({df['IS_FRAUD'].mean()*100:.1f}%)")
-    print(f"   Норма:  {(~df['IS_FRAUD'].astype(bool)).sum():,}")
-    print(f"   RAW  → {OUTPUT_RAW}")
-    print(f"   PROC → {OUTPUT_PROC}")
-
+    OUTPUT_COLS = [
+        "TRX_ID", "MEMBER_NO", "TRANSACTION_DATE", "AUTHORIZATION_DATE",
+        "MERCHANT_NO", "MERCHANT_NAME", "CITY_NAME", "NATIONAL_CODE",
+        "MCC", "POS_MODE", "PRODUCT_NAME", "SETTLEMENT_AMOUNT", "SALES_AMOUNT",
+        "TRX_TYPE", "IS_FRAUD"
+    ]
+    return df[OUTPUT_COLS]
 
 
 if __name__ == "__main__":
-    print("Генерация данных (seed=42)...")
-    df = generate()
-    save(df)
-    print("\nПервые 5 строк:")
-    print(df.head().to_string(index=False))
+    df = generate_data()
+    print(f"📊 Итого записей: {len(df):,} | Фрод: {df['IS_FRAUD'].sum()} ({df['IS_FRAUD'].mean() * 100:.2f}%)")
 
+    # Путь сохранения в соответствии с архитектурой репозитория
+    output_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "data", "processed", "transactions_labeled.csv"))
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    df.to_csv(output_path, index=False)
+    print("✅ Файл сохранен в: ", output_path)

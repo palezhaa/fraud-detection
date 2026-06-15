@@ -43,23 +43,24 @@ def apply_rules_based_engine(df_input: pd.DataFrame) -> pd.DataFrame:
     df['R2_large_atm'] = df[atm_large].groupby(['MEMBER_NO', 'DATE_STR'])['TRX_ID'].transform('count')
     df['R2_large_atm'] = (df['R2_large_atm'] >=2).astype(int)
 
-#3 правило
+# 3 правило
     df['is_small'] = (df['SETTLEMENT_AMOUNT'] < 2000).astype(int)
 
     def count_in_window(group):
-        # Для каждой транзакции смотрим, сколько мелких транзакций было за последние 30 минут
         return group.rolling('30min', on='TRANSACTION_DATE')['TRX_ID'].count()
 
     small_df = df[df['is_small'] == 1]
 
     if not small_df.empty:
-        df.loc[df['is_small'] == 1, 'R3_small_trans'] = small_df.groupby('MEMBER_NO', group_keys=False).apply(
-            count_in_window)
+        # include_groups=False убирает назойливый DeprecationWarning
+        df.loc[df['is_small'] == 1, 'R3_small_trans'] = small_df.groupby('MEMBER_NO', group_keys=False, include_groups=False).apply(
+            lambda x: count_in_window(x)
+        )
     else:
         df['R3_small_trans'] = 0
 
     df['R3_small_trans'] = (df['R3_small_trans'].fillna(0) >= 5).astype(int)
-
+    
 #4 правило
     df['R4_night_trans'] = ((df['HOUR']>=0)& (df['HOUR'] <= 5) & (df['SETTLEMENT_AMOUNT'] >= 50_000)).astype(int)
 
