@@ -53,7 +53,7 @@ def apply_rules_based_engine(df_input: pd.DataFrame) -> pd.DataFrame:
 
     if not small_df.empty:
         # include_groups=False убирает назойливый DeprecationWarning
-        df.loc[df['is_small'] == 1, 'R3_small_trans'] = small_df.groupby('MEMBER_NO', group_keys=False, include_groups=False).apply(
+        df.loc[df['is_small'] == 1, 'R3_small_trans'] = small_df.groupby('MEMBER_NO', group_keys=False).apply(
             lambda x: count_in_window(x)
         )
     else:
